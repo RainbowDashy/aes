@@ -91,6 +91,32 @@ fn rot_word(x: u32) -> u32 {
     x.wrapping_shl(8) + x.wrapping_shr(24)
 }
 
+fn mix_columns(s: &mut [[u8; 4]; 4]) {
+    let mul_vec = |a: [u8; 4], s: [u8; 4]| -> u8 {
+        let mut res = 0;
+        for i in 0..4 {
+            res ^= mul(a[i], s[i]);
+        }
+        res
+    };
+    for j in 0..4 {
+        let r = [s[0][j], s[1][j], s[2][j], s[3][j]];
+        s[0][j] = mul_vec([2, 3, 1, 1], r);
+        s[1][j] = mul_vec([1, 2, 3, 1], r);
+        s[2][j] = mul_vec([1, 1, 2, 3], r);
+        s[3][j] = mul_vec([3, 1, 1, 2], r);
+    }
+}
+
+fn add_round_key(s: &mut [[u8; 4]; 4], w: &[u32]) {
+    let w: [u32; 4] = w.clone().try_into().unwrap();
+    for j in 0..4 {
+        for i in 0..4 {
+            s[i][j] ^= w[j].to_be_bytes()[i];
+        }
+    }
+}
+
 impl AES128 {
     const Nb: usize = 4;
     const Nk: usize = 4;
@@ -103,18 +129,18 @@ impl AES128 {
             }
         }
 
-        Self::add_round_key(&mut state, &w[0..Self::Nb]);
+        add_round_key(&mut state, &w[0..Self::Nb]);
 
         for round in 1..Self::Nr {
             sub_bytes(&mut state);
             shift_rows(&mut state);
-            Self::mix_columns(&mut state);
-            Self::add_round_key(&mut state, &w[round * Self::Nb..(round + 1) * Self::Nb]);
+            mix_columns(&mut state);
+            add_round_key(&mut state, &w[round * Self::Nb..(round + 1) * Self::Nb]);
         }
 
         sub_bytes(&mut state);
         shift_rows(&mut state);
-        Self::add_round_key(
+        add_round_key(
             &mut state,
             &w[Self::Nr * Self::Nb..(Self::Nr + 1) * Self::Nb],
         );
@@ -122,38 +148,10 @@ impl AES128 {
         let mut output = [0; 16];
         for j in 0..4 {
             for i in 0..4 {
-                output[j*4 +i] = state[i][j];
+                output[j * 4 + i] = state[i][j];
             }
         }
         output
-    }
-
-    fn mix_columns(s: &mut [[u8; 4]; 4]) {
-        let mul_vec = |a: [u8; 4], s: [u8; 4]| -> u8 {
-            let mut res = 0;
-            for i in 0..4 {
-                res ^= mul(a[i], s[i]);
-            }
-            res
-        };
-        for j in 0..4 {
-            let r = [s[0][j], s[1][j], s[2][j], s[3][j]];
-            s[0][j] = mul_vec([2, 3, 1, 1], r);
-            s[1][j] = mul_vec([1, 2, 3, 1], r);
-            s[2][j] = mul_vec([1, 1, 2, 3], r);
-            s[3][j] = mul_vec([3, 1, 1, 2], r);
-        }
-    }
-
-    fn add_round_key(s: &mut [[u8; 4]; 4], w: &[u32]) {
-        let w: [u32; 4] = w.clone().try_into().unwrap();
-        for j in 0..4 {
-            for i in 0..4 {
-                s[i][j] ^= w[j].to_be_bytes()[i];
-                // s[i][j] ^= u8::try_from(w[j].wrapping_shr((8 * (3 - i)).try_into().unwrap()) & 0xf)
-                // .unwrap();
-            }
-        }
     }
 
     fn key_expansion(key: &[u8]) -> Vec<u32> {
@@ -241,7 +239,7 @@ mod tests {
             [0x81, 0x19, 0xd3, 0x26],
             [0xe5, 0x9a, 0x7a, 0x4c],
         ];
-        AES128::mix_columns(&mut state);
+        mix_columns(&mut state);
         assert_eq!(aftet_mix_columns, state);
 
         let after_add_round_key = [
@@ -251,7 +249,7 @@ mod tests {
             [0xf2, 0x2b, 0x43, 0x49],
         ];
         let round = 1;
-        AES128::add_round_key(&mut state, &w[round * AES128::Nb..(round + 1) * AES128::Nb]);
+        add_round_key(&mut state, &w[round * AES128::Nb..(round + 1) * AES128::Nb]);
         assert_eq!(after_add_round_key, state);
     }
 
