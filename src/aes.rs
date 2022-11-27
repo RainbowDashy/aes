@@ -1,5 +1,3 @@
-use std::{borrow::BorrowMut, fmt::format};
-
 const SBOX: [u8; 256] = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -109,7 +107,7 @@ fn mix_columns(s: &mut [[u8; 4]; 4]) {
 }
 
 fn add_round_key(s: &mut [[u8; 4]; 4], w: &[u32]) {
-    let w: [u32; 4] = w.clone().try_into().unwrap();
+    let w: [u32; 4] = w.try_into().unwrap();
     for j in 0..4 {
         for i in 0..4 {
             s[i][j] ^= w[j].to_be_bytes()[i];
@@ -121,7 +119,15 @@ impl AES128 {
     const Nb: usize = 4;
     const Nk: usize = 4;
     const Nr: usize = 10;
-    fn encrypt(input: [u8; 16], w: Vec<u32>) -> [u8; 16] {
+    fn getCtx() -> AESContext {
+        AESContext {
+            Nb: Self::Nb,
+            Nk: Self::Nk,
+            Nr: Self::Nr,
+        }
+    }
+    fn encrypt(input: [u8; 16], key: [u8; 16]) -> [u8; 16] {
+        let w = key_expansion(&Self::getCtx(), &key);
         let mut state = [[0; 4]; 4];
         for j in 0..4 {
             for i in 0..4 {
@@ -153,29 +159,36 @@ impl AES128 {
         }
         output
     }
-
-    fn key_expansion(key: &[u8]) -> Vec<u32> {
-        let mut tmp = 0u32;
-        let mut w = vec![0; Self::Nb * (Self::Nr + 1)];
-
-        for i in 0..Self::Nk {
-            w[i] = u32::from_be_bytes([key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]])
-        }
-
-        for i in Self::Nk..Self::Nb * (Self::Nr + 1) {
-            tmp = w[i - 1];
-            if i % Self::Nk == 0 {
-                tmp = sub_word(rot_word(tmp)) ^ RCON[i / Self::Nk];
-            } else if Self::Nk > 6 && i % Self::Nk == 4 {
-                tmp = sub_word(tmp);
-            }
-            w[i] = w[i - Self::Nk] ^ tmp;
-        }
-        w
-    }
 }
 
+fn key_expansion(ctx: &AESContext, key: &[u8]) -> Vec<u32> {
+    let mut w = vec![0; ctx.Nb * (ctx.Nr + 1)];
+
+    for i in 0..ctx.Nk {
+        w[i] = u32::from_be_bytes([key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]])
+    }
+
+    for i in ctx.Nk..ctx.Nb * (ctx.Nr + 1) {
+        let mut tmp = w[i - 1];
+        if i % ctx.Nk == 0 {
+            tmp = sub_word(rot_word(tmp)) ^ RCON[i / ctx.Nk];
+        } else if ctx.Nk > 6 && i % ctx.Nk == 4 {
+            tmp = sub_word(tmp);
+        }
+        w[i] = w[i - ctx.Nk] ^ tmp;
+    }
+    w
+}
 struct AES128 {}
+
+struct AESContext {
+    Nb: usize,
+    Nk: usize,
+    Nr: usize,
+}
+
+impl AESContext {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,8 +207,7 @@ mod tests {
             0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4,
             0xc5, 0x5a,
         ];
-        let w = AES128::key_expansion(&key);
-        let get = AES128::encrypt(plaintext, w);
+        let get = AES128::encrypt(plaintext, key);
         assert_eq!(ciphertext, get);
     }
 
@@ -211,7 +223,7 @@ mod tests {
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
             0x4f, 0x3c,
         ];
-        let w = AES128::key_expansion(&key);
+        let w = key_expansion(&AES128::getCtx(), &key);
 
         let after_sub_bytes = [
             [0xd4, 0xe0, 0xb8, 0x1e],
@@ -259,7 +271,7 @@ mod tests {
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
             0x4f, 0x3c,
         ];
-        let w = AES128::key_expansion(&key);
+        let w = key_expansion(&AES128::getCtx(), &key);
         assert_eq!(44, w.len());
         assert_eq!(0x2b7e1516, w[0]);
         assert_eq!(0x28aed2a6, w[1]);
