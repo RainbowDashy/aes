@@ -150,20 +150,54 @@ fn add_round_key(s: &mut [[u8; 4]; 4], w: &[u32]) {
         }
     }
 }
+struct AESContext {
+    Nk: usize,
+    Nb: usize,
+    Nr: usize,
+}
 
-impl AES128 {
-    const Nb: usize = 4;
-    const Nk: usize = 4;
-    const Nr: usize = 10;
-    fn getCtx() -> AESContext {
+impl AESContext {
+    pub fn get_128() -> Self {
         AESContext {
-            Nb: Self::Nb,
-            Nk: Self::Nk,
-            Nr: Self::Nr,
+            Nk: 4,
+            Nb: 4,
+            Nr: 10,
         }
     }
-    fn encrypt(input: [u8; 16], key: [u8; 16]) -> [u8; 16] {
-        let w = key_expansion(&Self::getCtx(), &key);
+    pub fn get_192() -> Self {
+        AESContext {
+            Nk: 6,
+            Nb: 4,
+            Nr: 12,
+        }
+    }
+    pub fn get_256() -> Self {
+        AESContext {
+            Nk: 8,
+            Nb: 4,
+            Nr: 14,
+        }
+    }
+    fn key_expansion(&self, key: &[u8]) -> Vec<u32> {
+        let mut w = vec![0; self.Nb * (self.Nr + 1)];
+
+        for i in 0..self.Nk {
+            w[i] = u32::from_be_bytes([key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]])
+        }
+
+        for i in self.Nk..self.Nb * (self.Nr + 1) {
+            let mut tmp = w[i - 1];
+            if i % self.Nk == 0 {
+                tmp = sub_word(rot_word(tmp)) ^ RCON[i / self.Nk];
+            } else if self.Nk > 6 && i % self.Nk == 4 {
+                tmp = sub_word(tmp);
+            }
+            w[i] = w[i - self.Nk] ^ tmp;
+        }
+        w
+    }
+    pub fn encrypt(&self, input: [u8; 16], key: &[u8]) -> [u8; 16] {
+        let w = self.key_expansion(key);
         let mut state = [[0; 4]; 4];
         for j in 0..4 {
             for i in 0..4 {
@@ -171,21 +205,18 @@ impl AES128 {
             }
         }
 
-        add_round_key(&mut state, &w[0..Self::Nb]);
+        add_round_key(&mut state, &w[0..self.Nb]);
 
-        for round in 1..Self::Nr {
+        for round in 1..self.Nr {
             sub_bytes(&mut state);
             shift_rows(&mut state);
             mix_columns(&mut state);
-            add_round_key(&mut state, &w[round * Self::Nb..(round + 1) * Self::Nb]);
+            add_round_key(&mut state, &w[round * self.Nb..(round + 1) * self.Nb]);
         }
 
         sub_bytes(&mut state);
         shift_rows(&mut state);
-        add_round_key(
-            &mut state,
-            &w[Self::Nr * Self::Nb..(Self::Nr + 1) * Self::Nb],
-        );
+        add_round_key(&mut state, &w[self.Nr * self.Nb..(self.Nr + 1) * self.Nb]);
 
         let mut output = [0; 16];
         for j in 0..4 {
@@ -195,8 +226,8 @@ impl AES128 {
         }
         output
     }
-    fn decrypt(input: [u8; 16], key: [u8; 16]) -> [u8; 16] {
-        let w = key_expansion(&Self::getCtx(), &key);
+    pub fn decrypt(&self, input: [u8; 16], key: &[u8]) -> [u8; 16] {
+        let w = self.key_expansion(key);
         let mut state = [[0; 4]; 4];
         for j in 0..4 {
             for i in 0..4 {
@@ -204,21 +235,18 @@ impl AES128 {
             }
         }
 
-        add_round_key(
-            &mut state,
-            &w[Self::Nr * Self::Nb..(Self::Nr + 1) * Self::Nb],
-        );
+        add_round_key(&mut state, &w[self.Nr * self.Nb..(self.Nr + 1) * self.Nb]);
 
-        for round in (1..Self::Nr).rev() {
+        for round in (1..self.Nr).rev() {
             inv_shift_rows(&mut state);
             inv_sub_bytes(&mut state);
-            add_round_key(&mut state, &w[round * Self::Nb..(round + 1) * Self::Nb]);
+            add_round_key(&mut state, &w[round * self.Nb..(round + 1) * self.Nb]);
             inv_mix_columns(&mut state);
         }
 
         inv_shift_rows(&mut state);
         inv_sub_bytes(&mut state);
-        add_round_key(&mut state, &w[0..Self::Nb]);
+        add_round_key(&mut state, &w[0..self.Nb]);
 
         let mut output = [0; 16];
         for j in 0..4 {
@@ -229,34 +257,6 @@ impl AES128 {
         output
     }
 }
-
-fn key_expansion(ctx: &AESContext, key: &[u8]) -> Vec<u32> {
-    let mut w = vec![0; ctx.Nb * (ctx.Nr + 1)];
-
-    for i in 0..ctx.Nk {
-        w[i] = u32::from_be_bytes([key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]])
-    }
-
-    for i in ctx.Nk..ctx.Nb * (ctx.Nr + 1) {
-        let mut tmp = w[i - 1];
-        if i % ctx.Nk == 0 {
-            tmp = sub_word(rot_word(tmp)) ^ RCON[i / ctx.Nk];
-        } else if ctx.Nk > 6 && i % ctx.Nk == 4 {
-            tmp = sub_word(tmp);
-        }
-        w[i] = w[i - ctx.Nk] ^ tmp;
-    }
-    w
-}
-struct AES128 {}
-
-struct AESContext {
-    Nb: usize,
-    Nk: usize,
-    Nr: usize,
-}
-
-impl AESContext {}
 
 #[cfg(test)]
 mod tests {
@@ -276,9 +276,53 @@ mod tests {
             0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4,
             0xc5, 0x5a,
         ];
-        let encrypted= AES128::encrypt(plaintext, key);
+        let ctx = AESContext::get_128();
+        let encrypted = ctx.encrypt(plaintext, &key);
         assert_eq!(ciphertext, encrypted);
-        let decrypted = AES128::decrypt(encrypted, key);
+        let decrypted = ctx.decrypt(encrypted, &key);
+        assert_eq!(plaintext, decrypted);
+    }
+
+    #[test]
+    fn test_aes_192() {
+        let plaintext = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        let key = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+            0x1c, 0x1d, 0x1e, 0x1f,
+        ];
+        let ciphertext = [
+            0x8e, 0xa2, 0xb7, 0xca, 0x51, 0x67, 0x45, 0xbf, 0xea, 0xfc, 0x49, 0x90, 0x4b, 0x49,
+            0x60, 0x89,
+        ];
+        let ctx = AESContext::get_256();
+        let encrypted = ctx.encrypt(plaintext, &key);
+        assert_eq!(ciphertext, encrypted);
+        let decrypted = ctx.decrypt(encrypted, &key);
+        assert_eq!(plaintext, decrypted);
+    }
+
+    #[test]
+    fn test_aes_256() {
+        let plaintext = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ];
+        let key = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        ];
+        let ciphertext = [
+            0xdd, 0xa9, 0x7c, 0xa4, 0x86, 0x4c, 0xdf, 0xe0, 0x6e, 0xaf, 0x70, 0xa0, 0xec, 0x0d,
+            0x71, 0x91,
+        ];
+        let ctx = AESContext::get_192();
+        let encrypted = ctx.encrypt(plaintext, &key);
+        assert_eq!(ciphertext, encrypted);
+        let decrypted = ctx.decrypt(encrypted, &key);
         assert_eq!(plaintext, decrypted);
     }
 
@@ -294,7 +338,8 @@ mod tests {
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
             0x4f, 0x3c,
         ];
-        let w = key_expansion(&AES128::getCtx(), &key);
+        let ctx = AESContext::get_128();
+        let w = ctx.key_expansion(&key);
 
         let after_sub_bytes = [
             [0xd4, 0xe0, 0xb8, 0x1e],
@@ -332,7 +377,7 @@ mod tests {
             [0xf2, 0x2b, 0x43, 0x49],
         ];
         let round = 1;
-        add_round_key(&mut state, &w[round * AES128::Nb..(round + 1) * AES128::Nb]);
+        add_round_key(&mut state, &w[round * ctx.Nb..(round + 1) * ctx.Nb]);
         assert_eq!(after_add_round_key, state);
     }
 
@@ -342,7 +387,8 @@ mod tests {
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
             0x4f, 0x3c,
         ];
-        let w = key_expansion(&AES128::getCtx(), &key);
+        let ctx = AESContext::get_128();
+        let w = ctx.key_expansion(&key);
         assert_eq!(44, w.len());
         assert_eq!(0x2b7e1516, w[0]);
         assert_eq!(0x28aed2a6, w[1]);
