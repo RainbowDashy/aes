@@ -46,6 +46,11 @@ fn sub_byte(x: u8) -> u8 {
     SBOX[idx]
 }
 
+fn inv_sub_byte(x: u8) -> u8 {
+    let idx: usize = ((x.wrapping_shr(4)) * 0x10 + (x & 0xf)).into();
+    RSBOX[idx]
+}
+
 fn sub_bytes(s: &mut [[u8; 4]; 4]) {
     for a in s.iter_mut() {
         for b in a.iter_mut() {
@@ -54,10 +59,24 @@ fn sub_bytes(s: &mut [[u8; 4]; 4]) {
     }
 }
 
+fn inv_sub_bytes(s: &mut [[u8; 4]; 4]) {
+    for a in s.iter_mut() {
+        for b in a.iter_mut() {
+            *b = inv_sub_byte(*b);
+        }
+    }
+}
+
 fn shift_rows(s: &mut [[u8; 4]; 4]) {
     (s[1][0], s[1][1], s[1][2], s[1][3]) = (s[1][1], s[1][2], s[1][3], s[1][0]);
     (s[2][0], s[2][1], s[2][2], s[2][3]) = (s[2][2], s[2][3], s[2][0], s[2][1]);
     (s[3][0], s[3][1], s[3][2], s[3][3]) = (s[3][3], s[3][0], s[3][1], s[3][2])
+}
+
+fn inv_shift_rows(s: &mut [[u8; 4]; 4]) {
+    (s[1][0], s[1][1], s[1][2], s[1][3]) = (s[1][3], s[1][0], s[1][1], s[1][2]);
+    (s[2][0], s[2][1], s[2][2], s[2][3]) = (s[2][2], s[2][3], s[2][0], s[2][1]);
+    (s[3][0], s[3][1], s[3][2], s[3][3]) = (s[3][1], s[3][2], s[3][3], s[3][0]);
 }
 
 fn xtime(x: u8) -> u8 {
@@ -106,6 +125,23 @@ fn mix_columns(s: &mut [[u8; 4]; 4]) {
     }
 }
 
+fn inv_mix_columns(s: &mut [[u8; 4]; 4]) {
+    let mul_vec = |a: [u8; 4], s: [u8; 4]| -> u8 {
+        let mut res = 0;
+        for i in 0..4 {
+            res ^= mul(a[i], s[i]);
+        }
+        res
+    };
+    for j in 0..4 {
+        let r = [s[0][j], s[1][j], s[2][j], s[3][j]];
+        s[0][j] = mul_vec([0x0e, 0x0b, 0x0d, 0x09], r);
+        s[1][j] = mul_vec([0x09, 0x0e, 0x0b, 0x0d], r);
+        s[2][j] = mul_vec([0x0d, 0x09, 0x0e, 0x0b], r);
+        s[3][j] = mul_vec([0x0b, 0x0d, 0x09, 0x0e], r);
+    }
+}
+
 fn add_round_key(s: &mut [[u8; 4]; 4], w: &[u32]) {
     let w: [u32; 4] = w.try_into().unwrap();
     for j in 0..4 {
@@ -150,6 +186,39 @@ impl AES128 {
             &mut state,
             &w[Self::Nr * Self::Nb..(Self::Nr + 1) * Self::Nb],
         );
+
+        let mut output = [0; 16];
+        for j in 0..4 {
+            for i in 0..4 {
+                output[j * 4 + i] = state[i][j];
+            }
+        }
+        output
+    }
+    fn decrypt(input: [u8; 16], key: [u8; 16]) -> [u8; 16] {
+        let w = key_expansion(&Self::getCtx(), &key);
+        let mut state = [[0; 4]; 4];
+        for j in 0..4 {
+            for i in 0..4 {
+                state[i][j] = input[i + j * 4];
+            }
+        }
+
+        add_round_key(
+            &mut state,
+            &w[Self::Nr * Self::Nb..(Self::Nr + 1) * Self::Nb],
+        );
+
+        for round in (1..Self::Nr).rev() {
+            inv_shift_rows(&mut state);
+            inv_sub_bytes(&mut state);
+            add_round_key(&mut state, &w[round * Self::Nb..(round + 1) * Self::Nb]);
+            inv_mix_columns(&mut state);
+        }
+
+        inv_shift_rows(&mut state);
+        inv_sub_bytes(&mut state);
+        add_round_key(&mut state, &w[0..Self::Nb]);
 
         let mut output = [0; 16];
         for j in 0..4 {
@@ -207,8 +276,10 @@ mod tests {
             0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30, 0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4,
             0xc5, 0x5a,
         ];
-        let get = AES128::encrypt(plaintext, key);
-        assert_eq!(ciphertext, get);
+        let encrypted= AES128::encrypt(plaintext, key);
+        assert_eq!(ciphertext, encrypted);
+        let decrypted = AES128::decrypt(encrypted, key);
+        assert_eq!(plaintext, decrypted);
     }
 
     #[test]
